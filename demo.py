@@ -177,6 +177,108 @@ def export_text_with_closest_value(model, feature_names, encoders, X):
     
     return '\n'.join(enhanced_lines)
 
+def traverse_decision_tree_with_encode_data(model, data_encoded, data_original, feature_names, encoders, match_condition=None):
+    """
+    使用已编码的数据集遍历决策树，匹配数据集中符合条件的数据
+    
+    参数:
+        model: 训练好的决策树模型
+        data_encoded: 已编码的数据集 (DataFrame)
+        data_original: 原始数据集 (DataFrame)，用于匹配条件函数和显示最接近值
+        feature_names: 特征名称列表
+        encoders: 特征编码器字典，用于将原始数据转换为模型训练时的格式
+        match_condition: 匹配条件函数，接收过滤后的数据集，返回(match, rule)元组
+        
+    返回:
+        匹配结果列表，每个元素为(路径, 规则, 匹配结果)的元组
+    """
+    # 存储匹配结果
+    results = []
+    
+    # 如果没有提供匹配条件函数，使用默认函数（始终返回不匹配）
+    if match_condition is None:
+        def default_match_condition(input_data):
+            return False, ""
+        match_func = default_match_condition
+    else:
+        match_func = match_condition
+    
+    def traverse_node(node_id, current_encoded_data, current_original_data, path):
+        """
+        递归遍历决策树节点
+        
+        参数:
+            node_id: 当前节点ID
+            current_encoded_data: 当前节点的输入数据（经过编码和之前条件过滤）
+            current_original_data: 当前节点的原始输入数据（未编码但经过之前条件过滤）
+            path: 当前路径（条件序列）
+        """
+        if current_encoded_data.empty:
+            return
+        
+        tree = model.tree_
+        
+        if tree.children_left[node_id] == -1 and tree.children_right[node_id] == -1:
+            class_idx = np.argmax(tree.value[node_id])
+            predicted_class_encoded = model.classes_[class_idx]
+            prediction = predicted_class_encoded
+            if 'target' in encoders:
+                try:
+                    prediction = encoders['target'].inverse_transform([predicted_class_encoded])[0]
+                except ValueError:
+                    pass
+            leaf_path = path + [f"预测: {prediction}"]
+            match, rule = match_func(current_original_data)
+            if match:
+                results.append((leaf_path, rule, match))
+            return
+        
+        feature_idx = tree.feature[node_id]
+        threshold = tree.threshold[node_id]
+        feature_name = feature_names[feature_idx]
+
+        if feature_name not in current_encoded_data.columns:
+            return
+
+        # Left branch: feature <= threshold
+        closest_value_left = get_closest_value(feature_name, threshold, encoders, data_original, is_less_equal=True)
+        left_condition_text = f"{feature_name} <= {threshold:.1f}"
+        if closest_value_left != "":
+            left_condition_text += f" [最接近值: {closest_value_left}]"
+        
+        left_mask = current_encoded_data[feature_name] <= threshold
+        left_encoded_data = current_encoded_data[left_mask].copy()
+        left_original_data = current_original_data[left_mask].copy()
+        
+        match_left, rule_left = match_func(left_original_data)
+        current_path_left = path + [left_condition_text]
+        if match_left:
+            results.append((current_path_left, rule_left, match_left))
+        else:
+            traverse_node(tree.children_left[node_id], left_encoded_data, left_original_data, current_path_left)
+        
+        # Right branch: feature > threshold
+        closest_value_right = get_closest_value(feature_name, threshold, encoders, data_original, is_less_equal=False)
+        right_condition_text = f"{feature_name} > {threshold:.1f}"
+        if closest_value_right != "":
+            right_condition_text += f" [最接近值: {closest_value_right}]"
+            
+        right_mask = current_encoded_data[feature_name] > threshold
+        right_encoded_data = current_encoded_data[right_mask].copy()
+        right_original_data = current_original_data[right_mask].copy()
+        
+        match_right, rule_right = match_func(right_original_data)
+        current_path_right = path + [right_condition_text]
+        if match_right:
+            results.append((current_path_right, rule_right, match_right))
+        else:
+            traverse_node(tree.children_right[node_id], right_encoded_data, right_original_data, current_path_right)
+    
+    # Start traversal from the root node (0)
+    traverse_node(0, data_encoded, data_original, [])
+    
+    return results
+
 def traverse_decision_tree(model, data, feature_names, encoders, match_condition=None):
     """
     遍历决策树，匹配数据集中符合条件的数据
@@ -201,6 +303,12 @@ def traverse_decision_tree(model, data, feature_names, encoders, match_condition
         match_func = default_match_condition
     else:
         match_func = match_condition
+    
+    # 打印 encoders 字典的内容和特征值 'id' 的检查结果
+    print("\nEncoders 字典中的特征列:")
+    for key in encoders.keys():
+        print(f"- {key}")
+    print(f"\n特征值 'id' 是否在 encoders 中: {'id' in encoders}")
     
     # 对输入数据进行编码，与决策树模型训练时保持一致
     data_encoded = data.copy()
