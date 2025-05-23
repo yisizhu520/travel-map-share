@@ -388,25 +388,40 @@ class OptimalConditionalRuleDiscoverer:
         """
         简化条件字符串中的冗余条件
         
-        例如: "x <= 39.50 且 x <= 29.50 且 y ∈ {A}" 
-        简化为: "x <= 29.50 且 y ∈ {A}"
+        🔧 修复说明：
+        暂时禁用自动条件简化，因为这可能导致重要约束的丢失。
+        决策树生成的条件应该保持原样，确保每个分段都有完整的约束。
         
         Args:
             condition_str: 原始条件字符串
             
         Returns:
-            simplified_str: 简化后的条件字符串
+            simplified_str: 处理后的条件字符串
         """
         if not condition_str or condition_str.strip() == "":
             return condition_str
-            
-        # 解析条件
-        conditions = self._parse_condition(condition_str)
         
-        # 重新格式化（这会自动简化冗余条件）
-        simplified_str = self._format_merged_conditions(conditions)
+        # 🔧 临时禁用复杂的条件合并逻辑，直接返回原始条件
+        # 这样可以确保决策树生成的每个条件都被完整保留
         
-        return simplified_str
+        # 只进行基本的格式清理
+        cleaned = condition_str.strip()
+        
+        # 移除多余的空格
+        import re
+        cleaned = re.sub(r'\s+', ' ', cleaned)
+        cleaned = re.sub(r'\s*且\s*', ' 且 ', cleaned)
+        
+        return cleaned
+        
+        # 注释掉原有的复杂逻辑，避免产生矛盾条件
+        # # 解析条件
+        # conditions = self._parse_condition(condition_str)
+        # 
+        # # 重新格式化（这会自动简化冗余条件）
+        # simplified_str = self._format_merged_conditions(conditions)
+        # 
+        # return simplified_str
     
     def discover_optimal_rules(self, csv_file_path, target_col=None, 
                               manual_split_features=None, manual_poly_features=None):
@@ -689,18 +704,86 @@ class OptimalConditionalRuleDiscoverer:
                 # 只有一个规则，直接保留
                 merged_rules.append(group_rules[0])
             else:
-                # 多个规则需要合并
-                print(f"   合并规则: {rule_formula}")
-                print(f"   原有 {len(group_rules)} 个条件，尝试合并...")
+                # 🔧 修复：不再自动合并，而是检查是否应该合并
+                print(f"   检查规则: {rule_formula}")
+                print(f"   发现 {len(group_rules)} 个相同公式的条件")
                 
-                merged_rule = self._merge_conditions(group_rules, rule_formula)
-                merged_rules.append(merged_rule)
-                merge_count += len(group_rules) - 1
+                # 检查条件是否真的可以合并（不产生矛盾）
+                can_merge = self._can_merge_conditions_safely(group_rules)
                 
-                print(f"   ✅ 合并完成，条件: {merged_rule['condition']}")
+                if can_merge:
+                    merged_rule = self._merge_conditions(group_rules, rule_formula)
+                    merged_rules.append(merged_rule)
+                    merge_count += len(group_rules) - 1
+                    print(f"   ✅ 安全合并完成，条件: {merged_rule['condition']}")
+                else:
+                    # 不能安全合并，保留所有独立规则
+                    merged_rules.extend(group_rules)
+                    print(f"   ⚠️ 条件存在冲突，保留 {len(group_rules)} 个独立规则")
         
-        print(f"🎯 合并统计: 原有 {len(rules)} 条规则，合并后 {len(merged_rules)} 条规则，共合并了 {merge_count} 条")
+        print(f"🎯 合并统计: 原有 {len(rules)} 条规则，处理后 {len(merged_rules)} 条规则，实际合并了 {merge_count} 条")
         return merged_rules
+    
+    def _can_merge_conditions_safely(self, group_rules):
+        """
+        检查一组规则的条件是否可以安全合并（不产生逻辑矛盾）
+        
+        Args:
+            group_rules: 相同规则公式的规则列表
+            
+        Returns:
+            bool: 是否可以安全合并
+        """
+        if len(group_rules) <= 1:
+            return True
+        
+        # 解析所有条件
+        all_conditions = []
+        for rule in group_rules:
+            conditions = self._parse_condition(rule['condition'])
+            all_conditions.append(conditions)
+        
+        # 检查每个特征的条件是否可以兼容
+        all_features = set()
+        for conditions in all_conditions:
+            all_features.update(conditions.keys())
+        
+        for feature in all_features:
+            feature_ranges = []
+            
+            # 收集该特征的所有约束
+            for conditions in all_conditions:
+                if feature in conditions:
+                    cond = conditions[feature]
+                    if cond['type'] == 'numeric':
+                        lower = cond.get('lower')
+                        upper = cond.get('upper')
+                        
+                        # 构建范围
+                        if lower is not None and upper is not None:
+                            if lower >= upper:  # 矛盾范围
+                                return False
+                            feature_ranges.append((lower, upper))
+                        elif lower is not None:
+                            feature_ranges.append((lower, float('inf')))
+                        elif upper is not None:
+                            feature_ranges.append((float('-inf'), upper))
+            
+            # 检查范围是否有合理的交集
+            if len(feature_ranges) > 1:
+                # 计算所有范围的交集
+                intersection = feature_ranges[0]
+                for rng in feature_ranges[1:]:
+                    # 计算交集
+                    new_lower = max(intersection[0], rng[0])
+                    new_upper = min(intersection[1], rng[1])
+                    
+                    if new_lower >= new_upper:  # 没有有效交集
+                        return False
+                    
+                    intersection = (new_lower, new_upper)
+        
+        return True
     
     def _merge_conditions(self, group_rules, rule_formula):
         """
@@ -744,7 +827,7 @@ class OptimalConditionalRuleDiscoverer:
         解析条件字符串为结构化格式
         
         Args:
-            condition_str: 条件字符串，如 "x <= 39.50 且 y ∈ {y1}"
+            condition_str: 条件字符串，如 "x <= 39.50 且 y ∈ {y1}" 或 "29.50 < x <= 39.50"
             
         Returns:
             conditions: 解析后的条件字典
@@ -769,8 +852,27 @@ class OptimalConditionalRuleDiscoverer:
                     conditions[feature] = {'type': 'categorical', 'values': set()}
                 conditions[feature]['values'].update(values)
                 
-            elif '<=' in part:
-                # 数值条件：x <= 39.50
+            elif '<' in part and '<=' in part:
+                # 范围条件：29.50 < x <= 39.50
+                import re
+                match = re.match(r'(\d+\.?\d*)\s*<\s*(\w+)\s*<=\s*(\d+\.?\d*)', part)
+                if match:
+                    lower_val, feature, upper_val = match.groups()
+                    feature = feature.strip()
+                    lower = float(lower_val)
+                    upper = float(upper_val)
+                    
+                    if feature not in conditions:
+                        conditions[feature] = {'type': 'numeric', 'upper': None, 'lower': None}
+                    
+                    # 设置范围边界
+                    if conditions[feature]['lower'] is None or lower > conditions[feature]['lower']:
+                        conditions[feature]['lower'] = lower
+                    if conditions[feature]['upper'] is None or upper < conditions[feature]['upper']:
+                        conditions[feature]['upper'] = upper
+                        
+            elif '<=' in part and '<' not in part:
+                # 单边条件：x <= 39.50
                 feature, value_str = part.split('<=')
                 feature = feature.strip()
                 value = float(value_str.strip())
@@ -781,8 +883,8 @@ class OptimalConditionalRuleDiscoverer:
                 if conditions[feature]['upper'] is None or value < conditions[feature]['upper']:
                     conditions[feature]['upper'] = value
                     
-            elif '>' in part:
-                # 数值条件：x > 39.50
+            elif '>' in part and not ('<' in part and '<=' in part):
+                # 单边条件：x > 39.50
                 feature, value_str = part.split('>')
                 feature = feature.strip()
                 value = float(value_str.strip())
@@ -938,21 +1040,38 @@ class OptimalConditionalRuleDiscoverer:
                 
             elif condition['type'] == 'numeric':
                 if condition['lower'] is not None and condition['upper'] is not None:
-                    # 检查是否为无意义的范围
+                    # 🔧 修复：检查矛盾条件并提供合理处理
                     if condition['lower'] >= condition['upper']:
-                        # 这种情况下，保留更宽泛的条件
-                        if abs(condition['lower']) > abs(condition['upper']):
-                            condition_parts.append(f"{feature} > {condition['lower']:.2f}")
+                        # 矛盾条件：记录警告但不跳过，而是选择更合理的条件
+                        print(f"   ⚠️ 检测到矛盾条件: {feature} > {condition['lower']:.2f} 且 {feature} <= {condition['upper']:.2f}")
+                        
+                        # 选择中间值作为单点条件，或者选择更合理的边界
+                        if abs(condition['lower'] - condition['upper']) < 0.01:
+                            # 如果差值很小，可能是浮点精度问题，使用约等于条件
+                            mid_val = (condition['lower'] + condition['upper']) / 2
+                            condition_parts.append(f"{feature} ≈ {mid_val:.2f}")
                         else:
-                            condition_parts.append(f"{feature} <= {condition['upper']:.2f}")
+                            # 差值较大，这确实是个矛盾，可能需要拆分为多个独立规则
+                            # 暂时跳过这个特征的约束，但记录错误
+                            print(f"   ❌ 特征 {feature} 的条件存在严重矛盾，跳过此约束")
+                            continue
                     else:
                         condition_parts.append(f"{condition['lower']:.2f} < {feature} <= {condition['upper']:.2f}")
                 elif condition['upper'] is not None:
                     condition_parts.append(f"{feature} <= {condition['upper']:.2f}")
                 elif condition['lower'] is not None:
                     condition_parts.append(f"{feature} > {condition['lower']:.2f}")
+                else:
+                    # 既没有上界也没有下界，这个条件无效
+                    print(f"   ⚠️ 特征 {feature} 没有有效的数值约束")
         
-        return ' 且 '.join(condition_parts)
+        result = ' 且 '.join(condition_parts)
+        
+        # 🔧 新增：验证结果条件的合理性
+        if not result or len(condition_parts) == 0:
+            print(f"   ❌ 警告：生成的条件为空或无效")
+            
+        return result
 
 def discover_optimal_conditional_rules(csv_file_path, target_col=None,
                                       manual_split_features=None, manual_poly_features=None,
