@@ -245,6 +245,9 @@ class OptimalConditionalRuleDiscoverer:
                             rule_str = self._format_polynomial_rule(model, poly_features, target_col)
                             condition_str = " 且 ".join(conditions)
                             
+                            # 🔧 新增：简化条件字符串
+                            condition_str = self._simplify_condition_string(condition_str)
+                            
                             segment_scores.append(avg_score)
                             segment_rules.append({
                                 'split_features': split_features,
@@ -381,6 +384,30 @@ class OptimalConditionalRuleDiscoverer:
         else:
             return round(value, 4)
     
+    def _simplify_condition_string(self, condition_str):
+        """
+        简化条件字符串中的冗余条件
+        
+        例如: "x <= 39.50 且 x <= 29.50 且 y ∈ {A}" 
+        简化为: "x <= 29.50 且 y ∈ {A}"
+        
+        Args:
+            condition_str: 原始条件字符串
+            
+        Returns:
+            simplified_str: 简化后的条件字符串
+        """
+        if not condition_str or condition_str.strip() == "":
+            return condition_str
+            
+        # 解析条件
+        conditions = self._parse_condition(condition_str)
+        
+        # 重新格式化（这会自动简化冗余条件）
+        simplified_str = self._format_merged_conditions(conditions)
+        
+        return simplified_str
+    
     def discover_optimal_rules(self, csv_file_path, target_col=None, 
                               manual_split_features=None, manual_poly_features=None):
         """
@@ -436,18 +463,21 @@ class OptimalConditionalRuleDiscoverer:
                 print(f"使用启发式方法选择 {len(combinations_to_try)} 个特征组合")
             
             # 6. 评估所有组合
-            print("\n开始评估特征组合...")
+            print("\n🔍 开始评估特征组合...")
             best_score = -1
             best_rules = []
+            progress_interval = max(1, len(combinations_to_try) // 10)
             
             for i, (split_features, poly_features) in enumerate(combinations_to_try):
-                if i % max(1, len(combinations_to_try) // 10) == 0:
+                # 只在关键进度点显示信息
+                if i % progress_interval == 0 or i == len(combinations_to_try) - 1:
                     progress = (i + 1) / len(combinations_to_try) * 100
-                    print(f"进度: {progress:.1f}% ({i+1}/{len(combinations_to_try)})")
+                    print(f"   进度: {progress:.1f}% ({i+1}/{len(combinations_to_try)}) - 当前最佳分数: {best_score:.3f}")
                 
                 score, rules = self._evaluate_combination(encoded_data, split_features, poly_features, target_col)
                 
                 if score > best_score:
+                    previous_score = best_score
                     best_score = score
                     best_rules = rules
                     self.best_configuration = {
@@ -457,23 +487,30 @@ class OptimalConditionalRuleDiscoverer:
                         'num_rules': len(rules)
                     }
                     
-                    print(f"  新的最佳组合! 分段特征: {split_features}, 多项式特征: {poly_features}")
-                    print(f"  评分: {score:.3f}, 规则数量: {len(rules)}")
+                    # 只在找到明显更好的组合时才输出
+                    if previous_score <= 0 or score > previous_score * 1.05:  # 提升超过5%才报告
+                        print(f"   ✨ 发现更优组合! 分段特征: {split_features}")
+                        print(f"      多项式特征: {poly_features}")
+                        print(f"      评分提升: {score:.3f} (之前: {previous_score:.3f})")
             
             # 7. 输出结果
             elapsed_time = time.time() - start_time
-            print(f"\n搜索完成! 耗时: {elapsed_time:.2f}秒")
+            print(f"\n✅ 搜索完成! 耗时: {elapsed_time:.2f}秒")
             
             if best_rules:
-                print(f"\n最优特征配置:")
-                print(f"  分段特征: {self.best_configuration['split_features']}")
-                print(f"  多项式特征: {self.best_configuration['poly_features']}")
-                print(f"  综合评分: {self.best_configuration['score']:.3f}")
-                print(f"  发现规则数: {self.best_configuration['num_rules']}")
+                print(f"\n🏆 最优特征配置:")
+                print(f"   🔧 分段特征: {self.best_configuration['split_features']}")
+                print(f"   📊 多项式特征: {self.best_configuration['poly_features']}")
+                print(f"   📈 综合评分: {self.best_configuration['score']:.3f}")
+                print(f"   📋 发现规则数: {self.best_configuration['num_rules']}")
                 
                 self._display_optimal_results(best_rules)
             else:
-                print("未发现有效的条件规则")
+                print("❌ 未发现有效的条件规则")
+                print("💡 建议:")
+                print("   • 尝试减小 --min-samples 参数")
+                print("   • 尝试增大 --max-depth 参数")
+                print("   • 检查数据是否包含足够的数值特征")
             
             return best_rules
             
@@ -488,28 +525,427 @@ class OptimalConditionalRuleDiscoverer:
     
     def _display_optimal_results(self, rules):
         """显示最优结果"""
-        print(f"\n{'='*30} 最优规则详情 {'='*30}")
+        if not rules:
+            print("\n未发现任何有效规则")
+            return
+            
+        print(f"\n{'='*50} 最优规则详情 {'='*50}")
         
-        # 按交叉验证R²分数排序
-        sorted_rules = sorted(rules, key=lambda x: x['cv_r2_score'], reverse=True)
+        # 按交叉验证R²分数排序，去重
+        unique_rules = []
+        seen_rules = set()
         
+        for rule in rules:
+            rule_key = (rule['condition'], rule['rule'])
+            if rule_key not in seen_rules:
+                seen_rules.add(rule_key)
+                unique_rules.append(rule)
+        
+        sorted_rules = sorted(unique_rules, key=lambda x: x['cv_r2_score'], reverse=True)
+        
+        # 显示详细规则信息
         for i, rule in enumerate(sorted_rules, 1):
             print(f"\n规则 {i}:")
             print(f"  条件: {rule['condition']}")
             print(f"  规则: {rule['rule']}")
             print(f"  交叉验证R²: {rule['cv_r2_score']:.3f}")
             print(f"  样本数: {rule['sample_count']}")
+            if i < len(sorted_rules):  # 不是最后一个规则
+                print("  " + "-" * 60)
         
-        # 生成表格总结
-        print(f"\n{'='*20} 最优规则表格 {'='*20}")
-        print("| 排名 | 条件 | 规则 | CV-R² | 样本数 |")
-        print("|------|------|------|-------|--------|")
+        # 生成清晰的表格总结
+        print(f"\n{'='*50} 最优规则汇总表 {'='*50}")
         
+        # 动态调整列宽
+        max_condition_len = min(50, max(len(rule['condition']) for rule in sorted_rules) + 2)
+        max_rule_len = min(40, max(len(rule['rule']) for rule in sorted_rules) + 2)
+        
+        # 打印表头
+        header = f"| {'排名':^4} | {'条件':^{max_condition_len}} | {'规则':^{max_rule_len}} | {'R²':^5} | {'样本数':^6} |"
+        separator = "|" + "-" * 6 + "|" + "-" * (max_condition_len + 2) + "|" + "-" * (max_rule_len + 2) + "|" + "-" * 7 + "|" + "-" * 8 + "|"
+        
+        print(separator)
+        print(header)
+        print(separator)
+        
+        # 打印规则行
         for i, rule in enumerate(sorted_rules, 1):
-            condition = rule['condition'][:35] + "..." if len(rule['condition']) > 35 else rule['condition']
-            rule_str = rule['rule'][:45] + "..." if len(rule['rule']) > 45 else rule['rule']
+            condition = rule['condition']
+            if len(condition) > max_condition_len:
+                condition = condition[:max_condition_len-3] + "..."
+                
+            rule_str = rule['rule']
+            if len(rule_str) > max_rule_len:
+                rule_str = rule_str[:max_rule_len-3] + "..."
             
-            print(f"| {i} | {condition} | {rule_str} | {rule['cv_r2_score']:.3f} | {rule['sample_count']} |")
+            row = f"| {i:^4} | {condition:<{max_condition_len}} | {rule_str:<{max_rule_len}} | {rule['cv_r2_score']:^5.3f} | {rule['sample_count']:^6} |"
+            print(row)
+        
+        print(separator)
+        
+        # 统计信息
+        print(f"\n📊 原始规则统计:")
+        print(f"   • 总规则数: {len(sorted_rules)}")
+        print(f"   • 平均R²分数: {np.mean([r['cv_r2_score'] for r in sorted_rules]):.3f}")
+        print(f"   • 覆盖样本总数: {sum(r['sample_count'] for r in sorted_rules)}")
+        
+        # 质量分级统计
+        excellent_rules = [r for r in sorted_rules if r['cv_r2_score'] >= 0.9]
+        good_rules = [r for r in sorted_rules if 0.7 <= r['cv_r2_score'] < 0.9]
+        fair_rules = [r for r in sorted_rules if r['cv_r2_score'] < 0.7]
+        
+        print(f"   • 优秀规则(R²≥0.9): {len(excellent_rules)}条")
+        print(f"   • 良好规则(0.7≤R²<0.9): {len(good_rules)}条") 
+        print(f"   • 一般规则(R²<0.7): {len(fair_rules)}条")
+        
+        # 🔗 智能合并相同规则
+        merged_rules = self._merge_similar_rules(sorted_rules)
+        
+        if len(merged_rules) < len(sorted_rules):
+            # 显示合并后的结果
+            print(f"\n{'='*50} 智能合并后规则 {'='*50}")
+            
+            # 重新计算合并后规则的表格宽度
+            merged_max_condition_len = min(60, max(len(rule['condition']) for rule in merged_rules) + 2)
+            merged_max_rule_len = min(40, max(len(rule['rule']) for rule in merged_rules) + 2)
+            
+            # 合并后表格
+            merged_header = f"| {'排名':^4} | {'条件':^{merged_max_condition_len}} | {'规则':^{merged_max_rule_len}} | {'R²':^5} | {'样本数':^6} | {'合并数':^6} |"
+            merged_separator = "|" + "-" * 6 + "|" + "-" * (merged_max_condition_len + 2) + "|" + "-" * (merged_max_rule_len + 2) + "|" + "-" * 7 + "|" + "-" * 8 + "|" + "-" * 8 + "|"
+            
+            print(merged_separator)
+            print(merged_header)
+            print(merged_separator)
+            
+            # 按R²重新排序合并后的规则
+            merged_sorted = sorted(merged_rules, key=lambda x: x['cv_r2_score'], reverse=True)
+            
+            for i, rule in enumerate(merged_sorted, 1):
+                condition = rule['condition']
+                if len(condition) > merged_max_condition_len:
+                    condition = condition[:merged_max_condition_len-3] + "..."
+                    
+                rule_str = rule['rule']
+                if len(rule_str) > merged_max_rule_len:
+                    rule_str = rule_str[:merged_max_rule_len-3] + "..."
+                
+                merge_info = f"{rule.get('merged_from', 1)}" if 'merged_from' in rule else "1"
+                
+                row = f"| {i:^4} | {condition:<{merged_max_condition_len}} | {rule_str:<{merged_max_rule_len}} | {rule['cv_r2_score']:^5.3f} | {rule['sample_count']:^6} | {merge_info:^6} |"
+                print(row)
+            
+            print(merged_separator)
+            
+            # 合并后统计
+            print(f"\n📊 合并后规则统计:")
+            print(f"   • 合并后规则数: {len(merged_rules)} (减少了 {len(sorted_rules) - len(merged_rules)} 条)")
+            print(f"   • 平均R²分数: {np.mean([r['cv_r2_score'] for r in merged_rules]):.3f}")
+            print(f"   • 覆盖样本总数: {sum(r['sample_count'] for r in merged_rules)}")
+            
+            # 突出显示简化效果
+            simplification_rate = (len(sorted_rules) - len(merged_rules)) / len(sorted_rules) * 100
+            print(f"   🎯 规则简化率: {simplification_rate:.1f}%")
+            
+        else:
+            print(f"\n💡 所有规则都是唯一的，无需合并")
+            
+        return merged_rules if len(merged_rules) < len(sorted_rules) else sorted_rules
+    
+    def _merge_similar_rules(self, rules):
+        """
+        合并相同规则的条件
+        
+        Args:
+            rules: 规则列表
+            
+        Returns:
+            merged_rules: 合并后的规则列表
+        """
+        if not rules:
+            return []
+            
+        print(f"\n🔗 开始智能合并相同规则...")
+        
+        # 按规则内容分组
+        rule_groups = {}
+        for rule in rules:
+            rule_formula = rule['rule']
+            if rule_formula not in rule_groups:
+                rule_groups[rule_formula] = []
+            rule_groups[rule_formula].append(rule)
+        
+        merged_rules = []
+        merge_count = 0
+        
+        for rule_formula, group_rules in rule_groups.items():
+            if len(group_rules) == 1:
+                # 只有一个规则，直接保留
+                merged_rules.append(group_rules[0])
+            else:
+                # 多个规则需要合并
+                print(f"   合并规则: {rule_formula}")
+                print(f"   原有 {len(group_rules)} 个条件，尝试合并...")
+                
+                merged_rule = self._merge_conditions(group_rules, rule_formula)
+                merged_rules.append(merged_rule)
+                merge_count += len(group_rules) - 1
+                
+                print(f"   ✅ 合并完成，条件: {merged_rule['condition']}")
+        
+        print(f"🎯 合并统计: 原有 {len(rules)} 条规则，合并后 {len(merged_rules)} 条规则，共合并了 {merge_count} 条")
+        return merged_rules
+    
+    def _merge_conditions(self, group_rules, rule_formula):
+        """
+        合并一组相同规则的条件
+        
+        Args:
+            group_rules: 相同规则的列表
+            rule_formula: 规则公式
+            
+        Returns:
+            merged_rule: 合并后的规则
+        """
+        # 解析所有条件
+        all_conditions = []
+        total_samples = 0
+        total_r2_weighted = 0
+        
+        for rule in group_rules:
+            conditions = self._parse_condition(rule['condition'])
+            all_conditions.append(conditions)
+            total_samples += rule['sample_count']
+            total_r2_weighted += rule['cv_r2_score'] * rule['sample_count']
+        
+        # 计算加权平均R²
+        avg_r2 = total_r2_weighted / total_samples if total_samples > 0 else 0
+        
+        # 合并条件
+        merged_conditions = self._merge_condition_logic(all_conditions)
+        merged_condition_str = self._format_merged_conditions(merged_conditions)
+        
+        return {
+            'condition': merged_condition_str,
+            'rule': rule_formula,
+            'cv_r2_score': avg_r2,
+            'sample_count': total_samples,
+            'merged_from': len(group_rules)
+        }
+    
+    def _parse_condition(self, condition_str):
+        """
+        解析条件字符串为结构化格式
+        
+        Args:
+            condition_str: 条件字符串，如 "x <= 39.50 且 y ∈ {y1}"
+            
+        Returns:
+            conditions: 解析后的条件字典
+        """
+        conditions = {}
+        
+        # 按 "且" 分割条件
+        parts = condition_str.split(' 且 ')
+        
+        for part in parts:
+            part = part.strip()
+            
+            if ' ∈ ' in part:
+                # 分类条件：y ∈ {y1, y2}
+                feature, values_str = part.split(' ∈ ')
+                feature = feature.strip()
+                # 提取集合中的值
+                values_str = values_str.strip().replace('{', '').replace('}', '')
+                values = [v.strip() for v in values_str.split(',')]
+                
+                if feature not in conditions:
+                    conditions[feature] = {'type': 'categorical', 'values': set()}
+                conditions[feature]['values'].update(values)
+                
+            elif '<=' in part:
+                # 数值条件：x <= 39.50
+                feature, value_str = part.split('<=')
+                feature = feature.strip()
+                value = float(value_str.strip())
+                
+                if feature not in conditions:
+                    conditions[feature] = {'type': 'numeric', 'upper': None, 'lower': None}
+                
+                if conditions[feature]['upper'] is None or value < conditions[feature]['upper']:
+                    conditions[feature]['upper'] = value
+                    
+            elif '>' in part:
+                # 数值条件：x > 39.50
+                feature, value_str = part.split('>')
+                feature = feature.strip()
+                value = float(value_str.strip())
+                
+                if feature not in conditions:
+                    conditions[feature] = {'type': 'numeric', 'upper': None, 'lower': None}
+                
+                if conditions[feature]['lower'] is None or value > conditions[feature]['lower']:
+                    conditions[feature]['lower'] = value
+        
+        return conditions
+    
+    def _merge_condition_logic(self, all_conditions):
+        """
+        合并多个条件的逻辑
+        
+        Args:
+            all_conditions: 多个条件的列表
+            
+        Returns:
+            merged_conditions: 合并后的条件
+        """
+        merged = {}
+        
+        # 收集所有特征
+        all_features = set()
+        for conditions in all_conditions:
+            all_features.update(conditions.keys())
+        
+        for feature in all_features:
+            feature_conditions = []
+            
+            # 收集该特征的所有条件
+            for conditions in all_conditions:
+                if feature in conditions:
+                    feature_conditions.append(conditions[feature])
+            
+            if not feature_conditions:
+                continue
+                
+            first_condition = feature_conditions[0]
+            
+            if first_condition['type'] == 'categorical':
+                # 分类特征：取并集
+                all_values = set()
+                for cond in feature_conditions:
+                    all_values.update(cond['values'])
+                
+                merged[feature] = {
+                    'type': 'categorical',
+                    'values': all_values
+                }
+                
+            elif first_condition['type'] == 'numeric':
+                # 数值特征：计算真正的并集范围
+                ranges = []
+                
+                # 收集所有的数值范围
+                for cond in feature_conditions:
+                    upper = cond.get('upper')
+                    lower = cond.get('lower')
+                    
+                    # 构建范围元组 (lower_bound, upper_bound, inclusive_lower, inclusive_upper)
+                    if upper is not None and lower is not None:
+                        # 形如 lower < x <= upper
+                        ranges.append((lower, upper, False, True))
+                    elif upper is not None:
+                        # 形如 x <= upper，相当于 (-∞, upper]
+                        ranges.append((float('-inf'), upper, True, True))
+                    elif lower is not None:
+                        # 形如 x > lower，相当于 (lower, +∞)
+                        ranges.append((lower, float('inf'), False, True))
+                
+                # 合并重叠的范围
+                if ranges:
+                    merged_range = self._merge_numeric_ranges(ranges)
+                    
+                    # 将合并后的范围转换回条件格式
+                    if len(merged_range) == 1:
+                        lower, upper, incl_lower, incl_upper = merged_range[0]
+                        
+                        final_condition = {'type': 'numeric', 'upper': None, 'lower': None}
+                        
+                        if lower != float('-inf'):
+                            final_condition['lower'] = lower
+                        if upper != float('inf'):
+                            final_condition['upper'] = upper
+                            
+                        merged[feature] = final_condition
+                    else:
+                        # 多个不连续的范围，暂时取第一个范围（可以进一步优化）
+                        lower, upper, incl_lower, incl_upper = merged_range[0]
+                        final_condition = {'type': 'numeric', 'upper': None, 'lower': None}
+                        
+                        if lower != float('-inf'):
+                            final_condition['lower'] = lower
+                        if upper != float('inf'):
+                            final_condition['upper'] = upper
+                            
+                        merged[feature] = final_condition
+        
+        return merged
+    
+    def _merge_numeric_ranges(self, ranges):
+        """
+        合并数值范围
+        
+        Args:
+            ranges: 范围列表，每个元素为 (lower, upper, incl_lower, incl_upper)
+            
+        Returns:
+            merged_ranges: 合并后的范围列表
+        """
+        if not ranges:
+            return []
+        
+        # 排序范围
+        sorted_ranges = sorted(ranges, key=lambda x: (x[0], x[1]))
+        
+        merged = [sorted_ranges[0]]
+        
+        for current in sorted_ranges[1:]:
+            last = merged[-1]
+            
+            # 检查是否重叠或相邻
+            if current[0] <= last[1]:  # 有重叠
+                # 合并范围
+                new_lower = min(last[0], current[0])
+                new_upper = max(last[1], current[1])
+                merged[-1] = (new_lower, new_upper, True, True)
+            else:
+                # 没有重叠，添加新范围
+                merged.append(current)
+        
+        return merged
+    
+    def _format_merged_conditions(self, merged_conditions):
+        """
+        格式化合并后的条件
+        
+        Args:
+            merged_conditions: 合并后的条件字典
+            
+        Returns:
+            condition_str: 格式化的条件字符串
+        """
+        condition_parts = []
+        
+        for feature, condition in merged_conditions.items():
+            if condition['type'] == 'categorical':
+                values_str = ', '.join(sorted(condition['values']))
+                condition_parts.append(f"{feature} ∈ {{{values_str}}}")
+                
+            elif condition['type'] == 'numeric':
+                if condition['lower'] is not None and condition['upper'] is not None:
+                    # 检查是否为无意义的范围
+                    if condition['lower'] >= condition['upper']:
+                        # 这种情况下，保留更宽泛的条件
+                        if abs(condition['lower']) > abs(condition['upper']):
+                            condition_parts.append(f"{feature} > {condition['lower']:.2f}")
+                        else:
+                            condition_parts.append(f"{feature} <= {condition['upper']:.2f}")
+                    else:
+                        condition_parts.append(f"{condition['lower']:.2f} < {feature} <= {condition['upper']:.2f}")
+                elif condition['upper'] is not None:
+                    condition_parts.append(f"{feature} <= {condition['upper']:.2f}")
+                elif condition['lower'] is not None:
+                    condition_parts.append(f"{feature} > {condition['lower']:.2f}")
+        
+        return ' 且 '.join(condition_parts)
 
 def discover_optimal_conditional_rules(csv_file_path, target_col=None,
                                       manual_split_features=None, manual_poly_features=None,
@@ -560,24 +996,48 @@ if __name__ == "__main__":
     # 解析命令行参数
     args = parser.parse_args()
     
-    print("=== 优化版条件规则发现工具 ===")
+    print("🚀 === 优化版条件规则发现工具 === 🚀")
     print("主要特性:")
-    print("1. 智能特征组合穷举")
-    print("2. 交叉验证评估最优组合")
-    print("3. 启发式搜索优化")
-    print("4. 动态特征分配")
-    print()
+    print("  ✓ 智能特征组合穷举")
+    print("  ✓ 交叉验证评估最优组合")
+    print("  ✓ 启发式搜索优化")
+    print("  ✓ 动态特征分配")
+    print("  ✓ 支持分类和数值特征")
+    print("-" * 60)
     
     # 运行优化版规则发现
-    rules = discover_optimal_conditional_rules(
-        csv_file_path=args.csv_file,
-        target_col=args.target_col,
-        manual_split_features=args.split_features,
-        manual_poly_features=args.poly_features,
-        max_depth=args.max_depth,
-        min_samples_leaf=args.min_samples,
-        enable_exhaustive_search=not args.disable_exhaustive,
-        max_combinations=args.max_combinations
-    )
-    
-    print(f"\n最终发现的最优规则数量: {len(rules)}") 
+    try:
+        rules = discover_optimal_conditional_rules(
+            csv_file_path=args.csv_file,
+            target_col=args.target_col,
+            manual_split_features=args.split_features,
+            manual_poly_features=args.poly_features,
+            max_depth=args.max_depth,
+            min_samples_leaf=args.min_samples,
+            enable_exhaustive_search=not args.disable_exhaustive,
+            max_combinations=args.max_combinations
+        )
+        
+        # 最终总结
+        print(f"\n🎉 分析完成！")
+        print(f"   📋 最终发现的最优规则数量: {len(rules)}")
+        
+        if rules:
+            avg_quality = np.mean([r['cv_r2_score'] for r in rules])
+            print(f"   📈 规则平均质量(R²): {avg_quality:.3f}")
+            if avg_quality >= 0.9:
+                print("   🌟 规则质量: 优秀")
+            elif avg_quality >= 0.7:
+                print("   ⭐ 规则质量: 良好") 
+            else:
+                print("   📊 规则质量: 一般")
+        else:
+            print("   ⚠️  建议: 尝试调整参数或检查数据质量")
+            
+    except Exception as e:
+        print(f"❌ 程序执行出错: {e}")
+        import traceback
+        traceback.print_exc() 
+        
+    print("\n" + "="*60)
+    print("感谢使用条件规则发现工具! 🙏") 
