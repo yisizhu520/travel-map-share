@@ -1,0 +1,28 @@
+flowchart TD
+    A[CSV数据加载] --> B[特征类型识别]
+    B --> C{数值特征 vs 分类特征}
+    C --> D[分类特征标签编码]
+    D --> E[特征组合生成]
+    E --> F{穷举 vs 启发式}
+    F -->|穷举搜索| G[所有可能组合]
+    F -->|启发式| H[筛选高质量组合]
+    G --> I[组合评估循环]
+    H --> I
+    I --> J[决策树分段]
+    J --> K[条件路径提取]
+    K --> L[每个分段线性拟合]
+    L --> M[交叉验证评估]
+    M --> N{是否最优组合?}
+    N -->|否| I
+    N -->|是| O[更新最佳结果]
+    O --> P{还有组合?}
+    P -->|是| I
+    P -->|否| Q[输出最优规则]
+    Q --> R[规则展示与分析]
+    
+    style A fill:#e1f5fe
+    style Q fill:#c8e6c9
+    style R fill:#c8e6c9
+    style J fill:#fff3e0
+    style L fill:#fff3e0
+    style M fill:#fce4ec

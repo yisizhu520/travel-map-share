@@ -4,6 +4,8 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 import numpy as np
 import warnings
+import argparse
+
 warnings.filterwarnings('ignore')
 
 class ConditionalRuleDiscoverer:
@@ -38,32 +40,59 @@ class ConditionalRuleDiscoverer:
         self.discovered_rules = []
         
     def _auto_detect_features(self, data):
-        """自动检测特征列"""
+        """
+        自动检测特征列
+        假设第一行是 header，最后一列是目标列，其他列是特征列
+        """
         numeric_cols = [col for col in data.columns if pd.api.types.is_numeric_dtype(data[col])]
         
         # 如果没有指定目标列，假设最后一列是目标列
         if self.target_col is None:
-            if 'result' in data.columns:
-                self.target_col = 'result'
-            elif 'target' in data.columns:
-                self.target_col = 'target'
-            else:
-                self.target_col = numeric_cols[-1]
+            self.target_col = data.columns[-1]
+            print(f"自动选择最后一列 '{self.target_col}' 作为目标列")
                 
-        # 如果没有指定多项式特征，使用常见的特征名
+        # 如果没有指定多项式特征，使用除目标列外的所有数值型特征作为多项式特征
         if self.polynomial_features is None:
+            # 优先使用常见多项式特征名
             common_poly_features = ['a', 'b', 'c', 'x1', 'x2', 'x3']
-            self.polynomial_features = [col for col in common_poly_features if col in data.columns]
+            common_features_found = [col for col in common_poly_features if col in data.columns]
             
-            # 如果没有找到常见特征名，使用除目标列外的前几列
-            if not self.polynomial_features:
-                available_features = [col for col in numeric_cols if col != self.target_col]
-                self.polynomial_features = available_features[:3]  # 取前3个特征
+            if common_features_found:
+                self.polynomial_features = common_features_found
+                print(f"发现常见多项式特征名: {self.polynomial_features}")
+            else:
+                # 如果没有找到常见特征名，使用除目标列和分段特征外的所有数值列
+                self.polynomial_features = [col for col in numeric_cols if col != self.target_col]
+                # 如果多项式特征太多，可能会使模型复杂度过高，此时只取前几个特征
+                if len(self.polynomial_features) > 5:
+                    print(f"警告: 多项式特征数量较多 ({len(self.polynomial_features)}个)，只使用前5个特征")
+                    self.polynomial_features = self.polynomial_features[:5]
                 
-        # 如果没有指定分段特征，使用除多项式特征和目标列外的所有数值特征
+        # 如果没有指定分段特征，尝试使用 'x', 'if_condition' 等典型分段特征名
+        # 如果找不到这些特征，则随机选择一个数值特征作为分段特征
         if self.split_features is None:
-            self.split_features = [col for col in numeric_cols 
-                                 if col not in self.polynomial_features and col != self.target_col]
+            typical_split_features = ['x', 'if_condition', 'condition', 'split', 'group']
+            split_features_found = [col for col in typical_split_features if col in data.columns]
+            
+            if split_features_found:
+                self.split_features = split_features_found
+                print(f"发现典型分段特征名: {self.split_features}")
+            else:
+                # 从多项式特征中选择一个作为分段特征
+                potential_split_features = [col for col in numeric_cols 
+                                          if col not in self.polynomial_features and col != self.target_col]
+                
+                if potential_split_features:
+                    self.split_features = potential_split_features
+                else:
+                    # 如果没有额外特征，则从多项式特征中取一个作为分段特征
+                    if self.polynomial_features:
+                        self.split_features = [self.polynomial_features[0]]
+                        # 从多项式特征列表中移除该特征
+                        self.polynomial_features = self.polynomial_features[1:]
+                        print(f"警告: 没有明确的分段特征，使用 '{self.split_features[0]}' 作为分段特征")
+                    else:
+                        print("错误: 无法确定分段特征，数据列太少")
     
     def _extract_tree_conditions(self, tree_model, feature_names):
         """从决策树中提取精确的条件路径"""
@@ -411,11 +440,20 @@ def discover_conditional_polynomial_rules_improved(csv_file_path,
     return discoverer.discover_rules(csv_file_path)
 
 if __name__ == "__main__":
-    # 示例使用
-    csv_file = 'c:\\workspace\\private\\travel-map-share\\duoxiangshi\\if_duoxiangshi.csv'
+    # 创建命令行参数解析器
+    parser = argparse.ArgumentParser(description='条件多项式规则发现工具')
+    parser.add_argument('csv_file', type=str, help='要分析的CSV文件路径')
+    parser.add_argument('--max-depth', type=int, default=3, help='决策树最大深度，默认为3')
+    parser.add_argument('--min-samples', type=int, default=30, help='叶子节点最小样本数，默认为30')
+    parser.add_argument('--target-col', type=str, help='目标列的名称，如果不指定则使用最后一列')
+    parser.add_argument('--poly-features', type=str, nargs='+', help='多项式特征的列名，多个列名用空格分隔')
+    parser.add_argument('--split-features', type=str, nargs='+', help='用于分段的特征列名，多个列名用空格分隔')
+    
+    # 解析命令行参数
+    args = parser.parse_args()
     
     print("=== 改进版条件规则发现 ===")
-    print(f"CSV文件: {csv_file}")
+    print(f"CSV文件: {args.csv_file}")
     print("主要改进:")
     print("1. 支持多特征分段")
     print("2. 精确的条件提取")
@@ -426,9 +464,12 @@ if __name__ == "__main__":
     
     # 使用改进版方法
     rules = discover_conditional_polynomial_rules_improved(
-        csv_file_path=csv_file,
-        max_depth=3,
-        min_samples_leaf=30  # 可以设置较小的值来发现更多规则
+        csv_file_path=args.csv_file,
+        polynomial_features=args.poly_features,
+        target_col=args.target_col,
+        split_features=args.split_features,
+        max_depth=args.max_depth,
+        min_samples_leaf=args.min_samples
     )
     
     print(f"\n发现的规则数量: {len(rules)}") 
