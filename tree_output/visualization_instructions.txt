@@ -1,0 +1,18 @@
+决策树可视化使用说明
+=================
+
+1. 文本格式的决策树:
+   - 文件: tree_output/tree_closest.txt
+   - 描述: 包含最接近离散值的决策树文本表示
+
+2. DOT格式的决策树:
+   - 文件: tree_output/tree.dot
+   - 描述: 可以使用Graphviz工具可视化的DOT文件
+   - 可视化方法:
+     a) 在线可视化: 复制DOT文件内容到 https://dreampuf.github.io/GraphvizOnline/ 并点击刷新
+     b) 本地可视化: 安装Graphviz后，使用命令 'dot -Tpng tree.dot -o tree.png'
+
+3. 决策路径:
+   - 文件: tree_output/decision_paths.txt
+   - 描述: 包含匹配条件的决策路径文本表示
+

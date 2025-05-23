@@ -1,0 +1,18 @@
+curl 'https://open-platform.qunhequnhe.com/docpub/api/openapi/creation' \
+  -H 'accept: application/json, text/plain, */*' \
+  -H 'accept-language: zh-CN,zh;q=0.9,en;q=0.8,zh-TW;q=0.7' \
+  -H 'cache-control: no-cache' \
+  -H 'content-type: application/json;charset=UTF-8' \
+  -b '_ga=GA1.2.1348801622.1744853959; _gid=GA1.2.563862495.1744853959; pubinternalsso=ER9ID4evXSqMBSJ1x0AGfRVR5ixcuAv4uP2E5ip6sBA=; corelanddi=1773b3a4-fdd0-4398-9ccf-ad7e765dbf33; Hm_lvt_bd8fd4c378d7721976f466053bd4a855=1742960054,1744960149; HMACCOUNT=33ABFD29E9811F52; JSESSIONID=node01j0rmzvdkmc0y13hyakgv8f14s1357.node0; Hm_lpvt_bd8fd4c378d7721976f466053bd4a855=1744961141' \
+  -H 'origin: https://open-platform.qunhequnhe.com' \
+  -H 'pragma: no-cache' \
+  -H 'priority: u=1, i' \
+  -H 'referer: https://open-platform.qunhequnhe.com/apipublishing/create' \
+  -H 'sec-ch-ua: "Chromium";v="134", "Not:A-Brand";v="24", "Google Chrome";v="134"' \
+  -H 'sec-ch-ua-mobile: ?0' \
+  -H 'sec-ch-ua-platform: "Windows"' \
+  -H 'sec-fetch-dest: empty' \
+  -H 'sec-fetch-mode: cors' \
+  -H 'sec-fetch-site: same-origin' \
+  -H 'user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36' \
+  --data-raw '{"apiType":0,"apiMethod":"POST","serviceType":0,"ownerGroup":"all","apiName":"批量获取定制模型","description":"批量获取定制模型","tester":"毛裤","regionInfos":[{"region":0,"url":"/p/openapi/v2/customdesigns/api/v1/designs/{designId}/levels/{levelId}/tooltypes/{toolType}/parammodel:batchget","prefix":"/p/openapi/v2/","defaultParamMappingSwitch":true}],"serviceApiUrl":"/dcs-pro-design/api/rest/customdesigns/{designId}/levels/{levelId}/tooltypes/{toolType}/parammodel:batchget","serviceApiMethod":"POST","apiSecurityLevel":1,"responseParamMappingSwitch":true,"paramInput":{"requestQuery":[{"param":"appuid","required":true,"type":"string","description":"第三方用户的ID"}]},"returnResult":{"param":"root","mappedParam":"root","type":"boolean"},"moduleId":6,"authType":1,"serviceHost":"com.qunhe.instdeco.service.tool-be.dcs-pro-design"}'

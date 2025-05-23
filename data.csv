@@ -1,0 +1,13 @@
+eflag,cflag,dflag,bflag,操作名称,flag
+1,a,,,widgetName,a
+1,b,,dd,widgetName,b
+1,c,,f,widgetName,c
+1,a,,g,widgetName,a
+2,c,b,,widgetName,b
+2,d,c,,widgetName,c
+2,e,a,v,widgetName,a
+2,f,b,a,widgetName,b
+3,a,,c,widgetName,c
+3,c,dd,a,widgetName,a
+3,a,,b,widgetName,b
+3,,jj,c,widgetName,c

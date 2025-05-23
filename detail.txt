@@ -1,0 +1,87 @@
+curl 'https://open-platform.qunhequnhe.com/docpub/api/openapi/detail?api_id=1912' \
+  -H 'accept: application/json, text/plain, */*' \
+  -H 'accept-language: zh-CN,zh;q=0.9,en;q=0.8,zh-TW;q=0.7' \
+  -H 'cache-control: no-cache' \
+  -b 'pubinternalsso=ER9ID4evXSqKNuFTRWOrdMVdO6PbrctH3HGGEchxchE=; corelanddi=504d4c29-aea8-4312-b8e1-b37251abb702; Hm_lvt_bd8fd4c378d7721976f466053bd4a855=1744960149,1746671858,1747212402,1747377074; HMACCOUNT=33ABFD29E9811F52; _ga=GA1.2.535071107.1747377075; _gid=GA1.2.1744393899.1747377075; Hm_lpvt_bd8fd4c378d7721976f466053bd4a855=1747378284; JSESSIONID=node09idg3a0p461m12o4hcbctff7g2036.node0' \
+  -H 'pragma: no-cache' \
+  -H 'priority: u=1, i' \
+  -H 'referer: https://open-platform.qunhequnhe.com/apipublishing/detail?id=1912' \
+  -H 'sec-ch-ua: "Chromium";v="134", "Not:A-Brand";v="24", "Google Chrome";v="134"' \
+  -H 'sec-ch-ua-mobile: ?0' \
+  -H 'sec-ch-ua-platform: "Windows"' \
+  -H 'sec-fetch-dest: empty' \
+  -H 'sec-fetch-mode: cors' \
+  -H 'sec-fetch-site: same-origin' \
+  -H 'user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36'
+
+
+  ---响应体如下：
+
+  {
+    "c": "0",
+    "m": "",
+    "d": {
+        "apiId": 1912,
+        "apiName": "批量获取定制模型",
+        "description": "批量获取定制模型",
+        "lastModified": 1741779484000,
+        "owner": "毛裤",
+        "ownerGroup": "all",
+        "status": 4,
+        "rejectReason": "",
+        "isVisitorOwnerApi": true,
+        "moduleList": [
+            {
+                "groupId": 217,
+                "groupType": 1,
+                "name": "读取所属方案数据"
+            }
+        ],
+        "solutionList": [],
+        "apiUrl": "/oauth2/openapi/v1/customdesigns/api/v1/designs/{designId}/levels/{levelId}/tooltypes/{toolType}/parammodel:batchget",
+        "apiMethod": "POST",
+        "authType": 0,
+        "apiType": 1,
+        "serviceType": 0,
+        "serviceHost": "com.qunhe.instdeco.service.tool-be.dcs-pro-design",
+        "serviceApiUrl": "/dcs-pro-design/api/rest/customdesigns/{designId}/levels/{levelId}/tooltypes/{toolType}/parammodel:batchget",
+        "serviceApiMethod": "POST",
+        "moduleId": 217,
+        "yapiAddress": "",
+        "tester": "毛裤",
+        "responseParamMappingSwitch": false,
+        "docId": 0,
+        "apiSecurityLevel": 0,
+        "paramInput": {
+            "requestHeaders": null,
+            "requestQuery": [
+                {
+                    "param": "open_id",
+                    "required": true,
+                    "type": "string",
+                    "description": "在流程[获取openid](https://open.kujiale.com/open/apps/2/docs?doc_id=95#获取用户openid \"获取openid\")中得到的酷家乐用户的openid"
+                },
+                {
+                    "param": "access_token",
+                    "required": true,
+                    "type": "string",
+                    "description": "在流程[获取Access Token](https://open.kujiale.com/open/apps/2/docs?doc_id=95#获取Access Token \"获取Access Token\")中得到的access token"
+                }
+            ],
+            "requestPathParam": null,
+            "requestBody": null
+        },
+        "returnResult": {
+            "param": "root",
+            "mappedParam": "root",
+            "type": "string"
+        },
+        "regionInfos": [
+            {
+                "region": 0,
+                "url": "/oauth2/openapi/v1/customdesigns/api/v1/designs/{designId}/levels/{levelId}/tooltypes/{toolType}/parammodel:batchget"
+            }
+        ]
+    },
+    "f": null
+}
