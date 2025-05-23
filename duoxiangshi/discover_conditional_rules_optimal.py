@@ -646,8 +646,15 @@ class OptimalConditionalRuleDiscoverer:
             simplification_rate = (len(sorted_rules) - len(merged_rules)) / len(sorted_rules) * 100
             print(f"   🎯 规则简化率: {simplification_rate:.1f}%")
             
+            # 💾 保存发现的规则供预测器使用
+            self.discovered_rules = merged_rules
+            print(f"\n✅ 规则已保存到发现器，可用于后续预测")
+            
         else:
             print(f"\n💡 所有规则都是唯一的，无需合并")
+            # 💾 保存发现的规则供预测器使用
+            self.discovered_rules = sorted_rules
+            print(f"\n✅ 规则已保存到发现器，可用于后续预测")
             
         return merged_rules if len(merged_rules) < len(sorted_rules) else sorted_rules
     
