@@ -147,48 +147,99 @@ class SimpleRulePredictor:
             }
         
         # 选择质量最高的规则
-        best_rule_idx, best_rule = max(matched_rules, key=lambda x: x[1]['cv_r2_score'])
+        def get_rule_score(rule_tuple):
+            """获取规则的评分，兼容不同的评分字段"""
+            _, rule = rule_tuple
+            # 优先使用cv_r2_score，如果没有则使用score
+            return rule.get('cv_r2_score', rule.get('score', 0))
+        
+        best_rule_idx, best_rule = max(matched_rules, key=get_rule_score)
+        best_score = get_rule_score((best_rule_idx, best_rule))
         
         # 应用规则进行预测
         try:
-            expression = self._parse_formula(best_rule['rule'])
+            # 🆕 区分分类规则和回归规则
+            rule_type = best_rule.get('rule_type', 'regression')
             
-            # 使用EvalWithCompoundTypes计算预测值
-            self.evaluator.names = input_data
-            prediction = self.evaluator.eval(expression)
-            
-            # 生成解释
-            explanation_parts = []
-            
-            if explain:
-                explanation_parts.extend([
-                    "🎯 预测结果分析:",
-                    f"   📊 预测值: {prediction:.3f}",
-                    f"   🎲 置信度: {best_rule['cv_r2_score']:.1%}",
-                    "",
-                    "📋 应用的规则:",
-                    f"   🔍 条件: {best_rule['condition']}",
-                    f"   📐 公式: {best_rule['rule']}",
-                    f"   📈 质量(R²): {best_rule['cv_r2_score']:.3f}",
-                    "",
-                    "🧮 计算过程:",
-                    f"   表达式: {expression}",
-                    f"   变量值: {input_data}",
-                    f"   📊 最终结果: {prediction:.3f}"
-                ])
+            if rule_type == 'classification':
+                # 分类规则：直接返回目标值，或从输入数据中获取对应列的值
+                target_value = best_rule.get('target_value')
                 
-                if len(matched_rules) > 1:
+                if target_value is None:
+                    # 如果没有target_value，尝试从规则字符串中解析
+                    rule_str = best_rule['rule']
+                    if '=' in rule_str:
+                        target_value = rule_str.split('=', 1)[1].strip()
+                
+                # 🆕 检查target_value是否是输入数据中的列名
+                if target_value in input_data:
+                    # 如果是列名，返回对应的具体值
+                    prediction = input_data[target_value]
+                else:
+                    # 否则直接返回target_value
+                    prediction = target_value
+                
+                # 生成分类规则的解释
+                explanation_parts = []
+                if explain:
                     explanation_parts.extend([
+                        "🎯 分类预测结果:",
+                        f"   📊 预测类别: {prediction}",
+                        f"   🎲 准确率: {best_score:.1%}",
                         "",
-                        f"💡 备注: 发现 {len(matched_rules)} 个匹配规则，已选择质量最高的规则"
+                        "📋 应用的分类规则:",
+                        f"   🔍 条件: {best_rule['condition']}",
+                        f"   📐 规则: {best_rule['rule']}",
+                        f"   📈 准确率: {best_score:.3f}",
+                        "",
+                        f"🔧 规则类型: 分类规则"
                     ])
+                    
+                    if len(matched_rules) > 1:
+                        explanation_parts.extend([
+                            "",
+                            f"💡 备注: 发现 {len(matched_rules)} 个匹配规则，已选择质量最高的规则"
+                        ])
+            else:
+                # 回归规则：使用表达式计算
+                expression = self._parse_formula(best_rule['rule'])
+                
+                # 使用EvalWithCompoundTypes计算预测值
+                self.evaluator.names = input_data
+                prediction = self.evaluator.eval(expression)
+                
+                # 生成回归规则的解释
+                explanation_parts = []
+                if explain:
+                    explanation_parts.extend([
+                        "🎯 回归预测结果:",
+                        f"   📊 预测值: {prediction:.3f}",
+                        f"   🎲 置信度: {best_score:.1%}",
+                        "",
+                        "📋 应用的回归规则:",
+                        f"   🔍 条件: {best_rule['condition']}",
+                        f"   📐 公式: {best_rule['rule']}",
+                        f"   📈 质量(R²): {best_score:.3f}",
+                        "",
+                        "🧮 计算过程:",
+                        f"   表达式: {expression}",
+                        f"   变量值: {input_data}",
+                        f"   📊 最终结果: {prediction:.3f}"
+                    ])
+                    
+                    if len(matched_rules) > 1:
+                        explanation_parts.extend([
+                            "",
+                            f"💡 备注: 发现 {len(matched_rules)} 个匹配规则，已选择质量最高的规则"
+                        ])
             
             return {
                 'prediction': prediction,
-                'confidence': best_rule['cv_r2_score'],
+                'confidence': best_score,
                 'explanation': '\n'.join(explanation_parts) if explain else '',
                 'matched_rules': [rule for _, rule in matched_rules],
                 'selected_rule': best_rule,
+                'rule_type': rule_type,
                 'status': 'success'
             }
             

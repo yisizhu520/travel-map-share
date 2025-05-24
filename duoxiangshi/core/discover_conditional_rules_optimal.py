@@ -1,7 +1,8 @@
 import pandas as pd
-from sklearn.tree import DecisionTreeRegressor, export_text
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score
+from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier, export_text
+from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import r2_score, accuracy_score, classification_report
 from sklearn.model_selection import cross_val_score
 from sklearn.preprocessing import LabelEncoder
 import numpy as np
@@ -20,6 +21,9 @@ class OptimalConditionalRuleDiscoverer:
     2. 交叉验证评估最优组合
     3. 支持离散型分段特征
     4. 动态特征分配优化
+    5. 🆕 支持分类型目标变量
+    6. 🆕 智能检测目标变量类型
+    7. 🆕 混合类型目标支持
     """
     
     def __init__(self, max_depth=3, min_samples_leaf=50, cv_folds=3, 
@@ -43,6 +47,84 @@ class OptimalConditionalRuleDiscoverer:
         self.best_configuration = None
         self.label_encoders = {}  # 存储分类特征的编码器
         self.categorical_features = []  # 存储分类特征列表
+        self.target_encoder = None  # 🆕 目标变量编码器
+        self.target_type = None  # 🆕 目标变量类型：'numeric', 'categorical', 'mixed'
+        self.is_classification = False  # 🆕 是否为分类问题
+        
+    def _identify_target_type(self, data, target_col):
+        """
+        🆕 识别目标变量的类型
+        
+        Returns:
+            target_type: 'numeric', 'categorical', 'mixed'
+            is_classification: bool
+        """
+        target_values = data[target_col]
+        
+        # 检查是否为数值型
+        if pd.api.types.is_numeric_dtype(target_values):
+            unique_count = target_values.nunique()
+            
+            # 如果唯一值很少，可能是编码的分类变量
+            if unique_count <= 20 and unique_count < len(target_values) * 0.1:
+                print(f"🔍 目标变量 '{target_col}' 识别为分类型（数值编码）")
+                return 'categorical', True
+            else:
+                print(f"🔍 目标变量 '{target_col}' 识别为数值型")
+                return 'numeric', False
+        else:
+            # 检查是否为混合类型（包含字符串和数字）
+            string_values = [v for v in target_values if isinstance(v, str)]
+            numeric_values = [v for v in target_values if isinstance(v, (int, float))]
+            
+            if len(string_values) > 0 and len(numeric_values) > 0:
+                print(f"🔍 目标变量 '{target_col}' 识别为混合类型（字符串+数字）")
+                return 'mixed', True
+            elif len(string_values) > 0:
+                print(f"🔍 目标变量 '{target_col}' 识别为分类型（字符串）")
+                return 'categorical', True
+            else:
+                print(f"🔍 目标变量 '{target_col}' 识别为数值型")
+                return 'numeric', False
+                
+    def _prepare_target_variable(self, data, target_col):
+        """
+        🆕 预处理目标变量
+        
+        Returns:
+            encoded_target: 编码后的目标变量
+            target_info: 目标变量信息
+        """
+        target_values = data[target_col]
+        
+        if self.target_type == 'mixed' or self.target_type == 'categorical':
+            # 需要编码分类目标
+            if self.target_encoder is None:
+                self.target_encoder = LabelEncoder()
+                encoded_target = self.target_encoder.fit_transform(target_values.astype(str))
+                
+                # 显示编码映射
+                class_mapping = dict(zip(self.target_encoder.classes_, 
+                                       self.target_encoder.transform(self.target_encoder.classes_)))
+                print(f"🏷️ 目标变量编码映射: {class_mapping}")
+            else:
+                encoded_target = self.target_encoder.transform(target_values.astype(str))
+                
+            target_info = {
+                'type': self.target_type,
+                'num_classes': len(self.target_encoder.classes_),
+                'classes': self.target_encoder.classes_,
+                'is_encoded': True
+            }
+            
+            return encoded_target, target_info
+        else:
+            # 数值型目标，无需编码
+            target_info = {
+                'type': 'numeric',
+                'is_encoded': False
+            }
+            return target_values.values, target_info
         
     def _identify_feature_types(self, data, target_col):
         """
@@ -105,7 +187,7 @@ class OptimalConditionalRuleDiscoverer:
         
         return encoded_data
     
-    def _generate_feature_combinations(self, numeric_features, categorical_features, target_col):
+    def _generate_feature_combinations(self, numeric_features, categorical_features, target_col, effective_poly_candidates):
         """
         生成所有可能的特征组合
         
@@ -113,6 +195,7 @@ class OptimalConditionalRuleDiscoverer:
             numeric_features: 数值特征列表
             categorical_features: 分类特征列表
             target_col: 目标列名
+            effective_poly_candidates: 有效多项式特征候选列表
             
         Returns:
             combinations_list: [(split_features, poly_features), ...]
@@ -120,7 +203,7 @@ class OptimalConditionalRuleDiscoverer:
         # 分段特征候选：数值特征 + 分类特征
         split_candidates = numeric_features + categorical_features
         # 多项式特征候选：只能是数值特征
-        poly_candidates = numeric_features
+        poly_candidates = effective_poly_candidates
         
         if len(split_candidates) < 1 or len(poly_candidates) < 1:
             print("警告: 没有足够的特征进行组合优化")
@@ -192,9 +275,124 @@ class OptimalConditionalRuleDiscoverer:
         
         return unique_combinations[:self.max_combinations]
     
-    def _evaluate_combination(self, data, split_features, poly_features, target_col):
+    def _detect_simple_categorical_mapping(self, data, target_col, encoded_target, target_info):
         """
-        评估单个特征组合的效果
+        🆕 检测简单的分类映射规则（如 lisan.csv 中的规律）
+        
+        专门处理形如：
+        - 当 x=x1 时，result = a的值
+        - 当 x=x2 时，result = b的值
+        - 当 x=x3 时，result = c的值
+        
+        Returns:
+            simple_rules: 发现的简单映射规则列表
+        """
+        if not self.is_classification:
+            return []
+            
+        print("🔍 尝试检测简单分类映射规则...")
+        simple_rules = []
+        
+        # 获取所有特征列（除目标列外）
+        feature_cols = [col for col in data.columns if col != target_col]
+        
+        # 尝试每个分类特征作为主分段特征
+        for primary_feature in self.categorical_features:
+            if primary_feature not in data.columns:
+                continue
+                
+            primary_values = sorted(data[primary_feature].unique())
+            print(f"   检测主特征 '{primary_feature}' 的值: {primary_values}")
+            
+            # 对于每个主特征值，尝试找到对应的映射特征
+            segment_rules = []
+            total_coverage = 0
+            
+            for primary_val in primary_values:
+                # 获取该分段的数据
+                segment_mask = data[primary_feature] == primary_val
+                segment_data = data[segment_mask]
+                segment_target = encoded_target[segment_mask]
+                
+                if len(segment_data) == 0:
+                    continue
+                
+                # 尝试每个其他特征作为映射特征
+                best_mapping_rule = None
+                best_accuracy = 0
+                
+                for mapping_feature in feature_cols:
+                    if mapping_feature == primary_feature:
+                        continue
+                        
+                    # 测试是否 result = mapping_feature 的值
+                    try:
+                        # 获取实际目标值（解码回原始值）
+                        actual_values = [self.target_encoder.classes_[int(t)] for t in segment_target]
+                        
+                        # 获取映射特征的值并转换为字符串
+                        predicted_values = [str(v) for v in segment_data[mapping_feature].values]
+                        
+                        # 计算准确率
+                        correct_predictions = sum(str(p) == str(a) for p, a in zip(predicted_values, actual_values))
+                        accuracy = correct_predictions / len(segment_data)
+                        
+                        if accuracy > best_accuracy and accuracy >= 0.8:  # 至少80%准确率
+                            best_accuracy = accuracy
+                            best_mapping_rule = {
+                                'primary_feature': primary_feature,
+                                'primary_value': primary_val,
+                                'mapping_feature': mapping_feature,
+                                'accuracy': accuracy,
+                                'sample_count': len(segment_data)
+                            }
+                            
+                    except Exception as e:
+                        continue
+                
+                if best_mapping_rule:
+                    segment_rules.append(best_mapping_rule)
+                    total_coverage += best_mapping_rule['sample_count']
+                    print(f"      ✅ {primary_feature}={primary_val} → result={best_mapping_rule['mapping_feature']} (准确率: {best_accuracy:.3f}, 样本: {best_mapping_rule['sample_count']})")
+                else:
+                    print(f"      ❌ {primary_feature}={primary_val} → 未找到有效映射")
+            
+            # 如果这个主特征的覆盖率足够好，保存规则
+            coverage_rate = total_coverage / len(data)
+            if coverage_rate >= 0.7 and len(segment_rules) >= 2:  # 降低覆盖率阈值到70%，至少2条规则
+                print(f"   ✅ 主特征 '{primary_feature}' 覆盖率: {coverage_rate:.1%}，发现 {len(segment_rules)} 条规则")
+                
+                # 转换为标准规则格式
+                for rule_info in segment_rules:
+                    condition = f"{rule_info['primary_feature']} ∈ {{{rule_info['primary_value']}}}"
+                    rule_formula = f"result = {rule_info['mapping_feature']}"
+                    
+                    rule = {
+                        'condition': condition,
+                        'rule': rule_formula,
+                        'score': rule_info['accuracy'],
+                        'sample_count': rule_info['sample_count'],
+                        'rule_type': 'classification',
+                        'target_value': rule_info['mapping_feature'],  # 标记映射特征
+                        'mapping_type': 'simple_categorical'  # 标记为简单分类映射
+                    }
+                    simple_rules.append(rule)
+                    
+                # 找到一个好的主特征就结束，避免重复
+                break
+            else:
+                print(f"   ❌ 主特征 '{primary_feature}' 覆盖率不足: {coverage_rate:.1%}")
+        
+        if simple_rules:
+            print(f"🎉 发现 {len(simple_rules)} 条简单分类映射规则")
+        else:
+            print("❌ 未发现简单分类映射规则")
+            
+        return simple_rules
+    
+    def _evaluate_combination(self, data, split_features, poly_features, target_col, encoded_target, target_info):
+        """
+        🆕 评估单个特征组合的效果（支持分类和回归）
         
         Returns:
             score: 该组合的综合评分
@@ -202,14 +400,21 @@ class OptimalConditionalRuleDiscoverer:
         """
         try:
             X_split = data[split_features]
-            y_target = data[target_col]
+            y_target = encoded_target
             
-            # 训练决策树
-            tree_model = DecisionTreeRegressor(
-                max_depth=self.max_depth,
-                min_samples_leaf=self.min_samples_leaf,
-                random_state=42
-            )
+            # 🆕 根据目标类型选择决策树
+            if self.is_classification:
+                tree_model = DecisionTreeClassifier(
+                    max_depth=self.max_depth,
+                    min_samples_leaf=self.min_samples_leaf,
+                    random_state=42
+                )
+            else:
+                tree_model = DecisionTreeRegressor(
+                    max_depth=self.max_depth,
+                    min_samples_leaf=self.min_samples_leaf,
+                    random_state=42
+                )
             
             tree_model.fit(X_split, y_target)
             
@@ -220,59 +425,164 @@ class OptimalConditionalRuleDiscoverer:
             segment_scores = []
             segment_rules = []
             
-            # 评估每个分段的多项式拟合效果
+            # 评估每个分段的拟合效果
             for leaf_id, conditions in conditions_by_leaf.items():
                 subset_mask = (leaf_ids == leaf_id)
                 subset_data = data[subset_mask]
+                subset_target = y_target[subset_mask]
                 
                 if len(subset_data) < self.min_samples_leaf // 2:
                     continue
                 
-                X_poly = subset_data[poly_features]
-                y_poly = subset_data[target_col]
+                if self.is_classification:
+                    # 🆕 分类问题处理
+                    rule_result = self._handle_classification_segment(
+                        subset_data, subset_target, poly_features, target_col, 
+                        target_info, conditions
+                    )
+                else:
+                    # 原有回归问题处理
+                    rule_result = self._handle_regression_segment(
+                        subset_data, subset_target, poly_features, target_col, conditions
+                    )
                 
-                # 使用交叉验证评估多项式拟合效果
-                if len(X_poly) >= self.cv_folds and len(poly_features) > 0:
-                    try:
-                        model = LinearRegression()
-                        cv_scores = cross_val_score(model, X_poly, y_poly, 
-                                                   cv=min(self.cv_folds, len(X_poly)), 
-                                                   scoring='r2')
-                        avg_score = np.mean(cv_scores)
-                        
-                        if avg_score > 0.1:  # 最小质量阈值
-                            model.fit(X_poly, y_poly)
-                            rule_str = self._format_polynomial_rule(model, poly_features, target_col)
-                            condition_str = " 且 ".join(conditions)
-                            
-                            # 🔧 新增：简化条件字符串
-                            condition_str = self._simplify_condition_string(condition_str)
-                            
-                            segment_scores.append(avg_score)
-                            segment_rules.append({
-                                'split_features': split_features,
-                                'poly_features': poly_features,
-                                'condition': condition_str,
-                                'rule': rule_str,
-                                'cv_r2_score': avg_score,
-                                'sample_count': len(subset_data),
-                                'model': model
-                            })
-                            
-                    except Exception as e:
-                        continue
+                if rule_result is not None:
+                    segment_scores.append(rule_result['score'])
+                    segment_rules.append(rule_result)
             
-            # 计算整体评分：平均R²分数 × 规则数量权重
+            # 计算整体评分
             if segment_scores:
                 avg_score = np.mean(segment_scores)
-                rule_count_bonus = min(len(segment_scores) / 10, 0.1)  # 规则数量奖励，最大10%
+                rule_count_bonus = min(len(segment_scores) / 10, 0.1)
                 total_score = avg_score + rule_count_bonus
                 return total_score, segment_rules
             else:
                 return 0.0, []
                 
         except Exception as e:
+            print(f"⚠️ 评估组合时出错: {e}")
             return 0.0, []
+    
+    def _handle_classification_segment(self, subset_data, subset_target, poly_features, target_col, target_info, conditions):
+        """
+        🆕 处理分类问题的分段
+        """
+        try:
+            # 检查该分段是否为纯净分段（所有样本的目标值相同）
+            unique_targets = np.unique(subset_target)
+            
+            if len(unique_targets) == 1:
+                # 纯净分段：直接映射规则
+                target_encoded = unique_targets[0]
+                target_original = self.target_encoder.inverse_transform([target_encoded])[0]
+                
+                # 🆕 生成分类规则
+                if len(poly_features) > 0:
+                    # 检查是否存在简单的映射关系
+                    rule_str = self._find_classification_mapping(subset_data, poly_features, target_original)
+                else:
+                    rule_str = f"{target_col} = {target_original}"
+                
+                condition_str = " 且 ".join(conditions)
+                condition_str = self._simplify_condition_string(condition_str)
+                
+                return {
+                    'split_features': conditions,
+                    'poly_features': poly_features,
+                    'condition': condition_str,
+                    'rule': rule_str,
+                    'score': 1.0,  # 纯净分段得满分
+                    'sample_count': len(subset_data),
+                    'rule_type': 'classification',
+                    'target_value': target_original
+                }
+            else:
+                # 混合分段：尝试找到局部模式
+                if len(poly_features) > 0:
+                    # 尝试使用多数投票或其他分类方法
+                    most_common_target = np.bincount(subset_target).argmax()
+                    target_original = self.target_encoder.inverse_transform([most_common_target])[0]
+                    accuracy = np.mean(subset_target == most_common_target)
+                    
+                    if accuracy >= 0.7:  # 至少70%准确率才认为有效
+                        rule_str = self._find_classification_mapping(subset_data, poly_features, target_original)
+                        condition_str = " 且 ".join(conditions)
+                        condition_str = self._simplify_condition_string(condition_str)
+                        
+                        return {
+                            'split_features': conditions,
+                            'poly_features': poly_features,
+                            'condition': condition_str,
+                            'rule': rule_str,
+                            'score': accuracy,
+                            'sample_count': len(subset_data),
+                            'rule_type': 'classification',
+                            'target_value': target_original
+                        }
+                
+                return None
+                
+        except Exception as e:
+            print(f"⚠️ 处理分类分段时出错: {e}")
+            return None
+    
+    def _find_classification_mapping(self, subset_data, poly_features, target_value):
+        """
+        🆕 寻找分类映射关系
+        """
+        # 检查是否存在简单的直接映射关系
+        for feature in poly_features:
+            feature_values = subset_data[feature].unique()
+            
+            if len(feature_values) == 1:
+                # 如果该特征在这个分段中只有一个值，可能存在直接映射
+                feature_value = feature_values[0]
+                return f"result = {feature}"
+        
+        # 如果没有找到简单映射，返回直接赋值
+        return f"result = {target_value}"
+    
+    def _handle_regression_segment(self, subset_data, subset_target, poly_features, target_col, conditions):
+        """
+        🆕 处理回归问题的分段（原有逻辑）
+        """
+        try:
+            if len(poly_features) == 0:
+                return None
+                
+            X_poly = subset_data[poly_features]
+            y_poly = subset_target
+            
+            # 使用交叉验证评估多项式拟合效果
+            if len(X_poly) >= self.cv_folds:
+                model = LinearRegression()
+                cv_scores = cross_val_score(model, X_poly, y_poly, 
+                                           cv=min(self.cv_folds, len(X_poly)), 
+                                           scoring='r2')
+                avg_score = np.mean(cv_scores)
+                
+                if avg_score > 0.1:  # 最小质量阈值
+                    model.fit(X_poly, y_poly)
+                    rule_str = self._format_polynomial_rule(model, poly_features, target_col)
+                    condition_str = " 且 ".join(conditions)
+                    condition_str = self._simplify_condition_string(condition_str)
+                    
+                    return {
+                        'split_features': conditions,
+                        'poly_features': poly_features,
+                        'condition': condition_str,
+                        'rule': rule_str,
+                        'score': avg_score,
+                        'sample_count': len(subset_data),
+                        'rule_type': 'regression',
+                        'model': model
+                    }
+            
+            return None
+            
+        except Exception as e:
+            print(f"⚠️ 处理回归分段时出错: {e}")
+            return None
     
     def _extract_tree_conditions(self, tree_model, feature_names, original_data):
         """
@@ -438,7 +748,7 @@ class OptimalConditionalRuleDiscoverer:
             best_rules: 最优规则列表
         """
         try:
-            print("=== 优化版条件规则发现（支持分类特征）===")
+            print("=== 优化版条件规则发现（支持分类特征+分类目标）===")
             start_time = time.time()
             
             # 1. 数据加载
@@ -451,33 +761,86 @@ class OptimalConditionalRuleDiscoverer:
                 target_col = data.columns[-1]
                 print(f"自动选择最后一列 '{target_col}' 作为目标列")
             
-            # 3. 识别特征类型
+            # 🆕 3. 识别目标变量类型
+            self.target_type, self.is_classification = self._identify_target_type(data, target_col)
+            
+            # 🆕 4. 预处理目标变量
+            encoded_target, target_info = self._prepare_target_variable(data, target_col)
+            
+            # 在数据中添加编码后的目标列用于后续处理
+            data_with_encoded_target = data.copy()
+            data_with_encoded_target[target_col + '_encoded'] = encoded_target
+            
+            # 5. 识别特征类型
             numeric_features, categorical_features, all_split_candidates = self._identify_feature_types(data, target_col)
             self.categorical_features = categorical_features
             
-            if len(all_split_candidates) < 1 or len(numeric_features) < 1:
+            if len(all_split_candidates) < 1:
                 print("错误: 没有足够的特征进行分析")
                 return []
             
-            # 4. 对分类特征进行编码
-            encoded_data = self._encode_categorical_features(data, categorical_features)
+            # 🆕 6. 根据目标类型调整多项式特征策略
+            if self.is_classification:
+                print("🔧 分类问题：允许所有特征作为'多项式'特征（实际为映射特征）")
+                # 对于分类问题，所有特征都可以作为"多项式"特征（实际是映射特征）
+                effective_poly_candidates = numeric_features + categorical_features
+            else:
+                print("🔧 回归问题：仅数值特征可作为多项式特征")
+                effective_poly_candidates = numeric_features
+                
+            if len(effective_poly_candidates) < 1:
+                print("错误: 没有足够的多项式特征进行分析")
+                return []
             
-            # 5. 特征组合策略
+            # 7. 对分类特征进行编码
+            encoded_data = self._encode_categorical_features(data_with_encoded_target, categorical_features)
+            
+            # 🆕 8. 对于分类问题，先尝试简单映射检测
+            simple_mapping_rules = []
+            if self.is_classification:
+                simple_mapping_rules = self._detect_simple_categorical_mapping(data, target_col, encoded_target, target_info)
+                
+                # 如果简单映射规则覆盖率足够高，可以跳过复杂搜索
+                if simple_mapping_rules:
+                    total_simple_coverage = sum(rule['sample_count'] for rule in simple_mapping_rules)
+                    simple_coverage_rate = total_simple_coverage / len(data)
+                    
+                    print(f"📊 简单映射规则覆盖率: {simple_coverage_rate:.1%}")
+                    
+                    if simple_coverage_rate >= 0.7:  # 降低阈值到70%
+                        print("🎉 简单映射规则覆盖率足够高，跳过复杂搜索")
+                        
+                        # 设置最佳配置
+                        self.best_configuration = {
+                            'split_features': ['simple_categorical_mapping'],
+                            'poly_features': ['all_features'],
+                            'score': sum(rule['score'] for rule in simple_mapping_rules) / len(simple_mapping_rules),
+                            'num_rules': len(simple_mapping_rules),
+                            'target_type': self.target_type,
+                            'is_classification': self.is_classification,
+                            'detection_method': 'simple_mapping'
+                        }
+                        
+                        self.discovered_rules = simple_mapping_rules
+                        self._display_optimal_results(simple_mapping_rules)
+                        return simple_mapping_rules
+            
+            # 8. 特征组合策略 (如果简单映射不足够好，则进行复杂搜索)
             if manual_split_features is not None and manual_poly_features is not None:
                 # 使用手动指定的特征组合
                 combinations_to_try = [(manual_split_features, manual_poly_features)]
                 print(f"使用手动指定的特征组合")
             elif self.enable_exhaustive_search:
                 # 生成所有可能的特征组合
-                combinations_to_try = self._generate_feature_combinations(numeric_features, categorical_features, target_col)
+                combinations_to_try = self._generate_feature_combinations(numeric_features, categorical_features, target_col, effective_poly_candidates)
                 print(f"生成 {len(combinations_to_try)} 个特征组合进行穷举搜索")
             else:
                 # 使用启发式方法生成少量高质量组合
-                all_combinations = self._generate_feature_combinations(numeric_features, categorical_features, target_col)
-                combinations_to_try = self._select_promising_combinations(all_combinations, all_split_candidates, numeric_features)
+                all_combinations = self._generate_feature_combinations(numeric_features, categorical_features, target_col, effective_poly_candidates)
+                combinations_to_try = self._select_promising_combinations(all_combinations, all_split_candidates, effective_poly_candidates)
                 print(f"使用启发式方法选择 {len(combinations_to_try)} 个特征组合")
             
-            # 6. 评估所有组合
+            # 9. 评估所有组合
             print("\n🔍 开始评估特征组合...")
             best_score = -1
             best_rules = []
@@ -489,7 +852,7 @@ class OptimalConditionalRuleDiscoverer:
                     progress = (i + 1) / len(combinations_to_try) * 100
                     print(f"   进度: {progress:.1f}% ({i+1}/{len(combinations_to_try)}) - 当前最佳分数: {best_score:.3f}")
                 
-                score, rules = self._evaluate_combination(encoded_data, split_features, poly_features, target_col)
+                score, rules = self._evaluate_combination(encoded_data, split_features, poly_features, target_col, encoded_target, target_info)
                 
                 if score > best_score:
                     previous_score = best_score
@@ -499,7 +862,9 @@ class OptimalConditionalRuleDiscoverer:
                         'split_features': split_features,
                         'poly_features': poly_features,
                         'score': score,
-                        'num_rules': len(rules)
+                        'num_rules': len(rules),
+                        'target_type': self.target_type,
+                        'is_classification': self.is_classification
                     }
                     
                     # 只在找到明显更好的组合时才输出
@@ -508,14 +873,15 @@ class OptimalConditionalRuleDiscoverer:
                         print(f"      多项式特征: {poly_features}")
                         print(f"      评分提升: {score:.3f} (之前: {previous_score:.3f})")
             
-            # 7. 输出结果
+            # 10. 输出结果
             elapsed_time = time.time() - start_time
             print(f"\n✅ 搜索完成! 耗时: {elapsed_time:.2f}秒")
             
             if best_rules:
                 print(f"\n🏆 最优特征配置:")
+                print(f"   🎯 问题类型: {'分类问题' if self.is_classification else '回归问题'}")
                 print(f"   🔧 分段特征: {self.best_configuration['split_features']}")
-                print(f"   📊 多项式特征: {self.best_configuration['poly_features']}")
+                print(f"   📊 {'映射特征' if self.is_classification else '多项式特征'}: {self.best_configuration['poly_features']}")
                 print(f"   📈 综合评分: {self.best_configuration['score']:.3f}")
                 print(f"   📋 发现规则数: {self.best_configuration['num_rules']}")
                 
@@ -525,7 +891,8 @@ class OptimalConditionalRuleDiscoverer:
                 print("💡 建议:")
                 print("   • 尝试减小 --min-samples 参数")
                 print("   • 尝试增大 --max-depth 参数")
-                print("   • 检查数据是否包含足够的数值特征")
+                if not self.is_classification:
+                    print("   • 检查数据是否包含足够的数值特征")
             
             return best_rules
             
@@ -546,7 +913,11 @@ class OptimalConditionalRuleDiscoverer:
             
         print(f"\n{'='*50} 最优规则详情 {'='*50}")
         
-        # 按交叉验证R²分数排序，去重
+        # 🆕 区分分类规则和回归规则
+        classification_rules = [r for r in rules if r.get('rule_type') == 'classification']
+        regression_rules = [r for r in rules if r.get('rule_type') == 'regression']
+        
+        # 按评分排序，去重
         unique_rules = []
         seen_rules = set()
         
@@ -556,14 +927,31 @@ class OptimalConditionalRuleDiscoverer:
                 seen_rules.add(rule_key)
                 unique_rules.append(rule)
         
-        sorted_rules = sorted(unique_rules, key=lambda x: x['cv_r2_score'], reverse=True)
+        # 🆕 根据规则类型选择合适的排序方式
+        if self.is_classification:
+            # 分类规则：按准确率排序
+            sorted_rules = sorted(unique_rules, key=lambda x: x['score'], reverse=True)
+            score_name = "准确率"
+        else:
+            # 回归规则：按R²排序
+            sorted_rules = sorted(unique_rules, key=lambda x: x.get('cv_r2_score', x['score']), reverse=True)
+            score_name = "R²"
         
         # 显示详细规则信息
         for i, rule in enumerate(sorted_rules, 1):
-            print(f"\n规则 {i}:")
+            rule_type_icon = "🎯" if rule.get('rule_type') == 'classification' else "📈"
+            print(f"\n{rule_type_icon} 规则 {i} ({'分类规则' if rule.get('rule_type') == 'classification' else '回归规则'}):")
             print(f"  条件: {rule['condition']}")
             print(f"  规则: {rule['rule']}")
-            print(f"  交叉验证R²: {rule['cv_r2_score']:.3f}")
+            
+            if rule.get('rule_type') == 'classification':
+                print(f"  准确率: {rule['score']:.3f}")
+                if 'target_value' in rule:
+                    print(f"  目标值: {rule['target_value']}")
+            else:
+                score_key = 'cv_r2_score' if 'cv_r2_score' in rule else 'score'
+                print(f"  {score_name}: {rule[score_key]:.3f}")
+                
             print(f"  样本数: {rule['sample_count']}")
             if i < len(sorted_rules):  # 不是最后一个规则
                 print("  " + "-" * 60)
@@ -576,8 +964,9 @@ class OptimalConditionalRuleDiscoverer:
         max_rule_len = min(40, max(len(rule['rule']) for rule in sorted_rules) + 2)
         
         # 打印表头
-        header = f"| {'排名':^4} | {'条件':^{max_condition_len}} | {'规则':^{max_rule_len}} | {'R²':^5} | {'样本数':^6} |"
-        separator = "|" + "-" * 6 + "|" + "-" * (max_condition_len + 2) + "|" + "-" * (max_rule_len + 2) + "|" + "-" * 7 + "|" + "-" * 8 + "|"
+        score_header = "准确率" if self.is_classification else "R²"
+        header = f"| {'排名':^4} | {'条件':^{max_condition_len}} | {'规则':^{max_rule_len}} | {score_header:^6} | {'样本数':^6} | {'类型':^4} |"
+        separator = "|" + "-" * 6 + "|" + "-" * (max_condition_len + 2) + "|" + "-" * (max_rule_len + 2) + "|" + "-" * 8 + "|" + "-" * 8 + "|" + "-" * 6 + "|"
         
         print(separator)
         print(header)
@@ -593,25 +982,52 @@ class OptimalConditionalRuleDiscoverer:
             if len(rule_str) > max_rule_len:
                 rule_str = rule_str[:max_rule_len-3] + "..."
             
-            row = f"| {i:^4} | {condition:<{max_condition_len}} | {rule_str:<{max_rule_len}} | {rule['cv_r2_score']:^5.3f} | {rule['sample_count']:^6} |"
+            # 🆕 根据规则类型显示不同的分数
+            if rule.get('rule_type') == 'classification':
+                score_val = rule['score']
+                rule_type_short = "分类"
+            else:
+                score_val = rule.get('cv_r2_score', rule['score'])
+                rule_type_short = "回归"
+            
+            row = f"| {i:^4} | {condition:<{max_condition_len}} | {rule_str:<{max_rule_len}} | {score_val:^6.3f} | {rule['sample_count']:^6} | {rule_type_short:^4} |"
             print(row)
         
         print(separator)
         
-        # 统计信息
-        print(f"\n📊 原始规则统计:")
+        # 🆕 分类型统计信息
+        print(f"\n📊 规则统计:")
         print(f"   • 总规则数: {len(sorted_rules)}")
-        print(f"   • 平均R²分数: {np.mean([r['cv_r2_score'] for r in sorted_rules]):.3f}")
+        
+        if classification_rules:
+            avg_accuracy = np.mean([r['score'] for r in classification_rules])
+            print(f"   • 分类规则数: {len(classification_rules)}")
+            print(f"   • 平均准确率: {avg_accuracy:.3f}")
+            
+            # 分类规则质量分级
+            excellent_class_rules = [r for r in classification_rules if r['score'] >= 0.95]
+            good_class_rules = [r for r in classification_rules if 0.8 <= r['score'] < 0.95]
+            fair_class_rules = [r for r in classification_rules if r['score'] < 0.8]
+            
+            print(f"   • 优秀分类规则(准确率≥95%): {len(excellent_class_rules)}条")
+            print(f"   • 良好分类规则(80%≤准确率<95%): {len(good_class_rules)}条")
+            print(f"   • 一般分类规则(准确率<80%): {len(fair_class_rules)}条")
+        
+        if regression_rules:
+            avg_r2 = np.mean([r.get('cv_r2_score', r['score']) for r in regression_rules])
+            print(f"   • 回归规则数: {len(regression_rules)}")
+            print(f"   • 平均R²分数: {avg_r2:.3f}")
+            
+            # 回归规则质量分级
+            excellent_reg_rules = [r for r in regression_rules if r.get('cv_r2_score', r['score']) >= 0.9]
+            good_reg_rules = [r for r in regression_rules if 0.7 <= r.get('cv_r2_score', r['score']) < 0.9]
+            fair_reg_rules = [r for r in regression_rules if r.get('cv_r2_score', r['score']) < 0.7]
+            
+            print(f"   • 优秀回归规则(R²≥0.9): {len(excellent_reg_rules)}条")
+            print(f"   • 良好回归规则(0.7≤R²<0.9): {len(good_reg_rules)}条")
+            print(f"   • 一般回归规则(R²<0.7): {len(fair_reg_rules)}条")
+        
         print(f"   • 覆盖样本总数: {sum(r['sample_count'] for r in sorted_rules)}")
-        
-        # 质量分级统计
-        excellent_rules = [r for r in sorted_rules if r['cv_r2_score'] >= 0.9]
-        good_rules = [r for r in sorted_rules if 0.7 <= r['cv_r2_score'] < 0.9]
-        fair_rules = [r for r in sorted_rules if r['cv_r2_score'] < 0.7]
-        
-        print(f"   • 优秀规则(R²≥0.9): {len(excellent_rules)}条")
-        print(f"   • 良好规则(0.7≤R²<0.9): {len(good_rules)}条") 
-        print(f"   • 一般规则(R²<0.7): {len(fair_rules)}条")
         
         # 🔗 智能合并相同规则
         merged_rules = self._merge_similar_rules(sorted_rules)
@@ -625,15 +1041,15 @@ class OptimalConditionalRuleDiscoverer:
             merged_max_rule_len = min(40, max(len(rule['rule']) for rule in merged_rules) + 2)
             
             # 合并后表格
-            merged_header = f"| {'排名':^4} | {'条件':^{merged_max_condition_len}} | {'规则':^{merged_max_rule_len}} | {'R²':^5} | {'样本数':^6} | {'合并数':^6} |"
-            merged_separator = "|" + "-" * 6 + "|" + "-" * (merged_max_condition_len + 2) + "|" + "-" * (merged_max_rule_len + 2) + "|" + "-" * 7 + "|" + "-" * 8 + "|" + "-" * 8 + "|"
+            merged_header = f"| {'排名':^4} | {'条件':^{merged_max_condition_len}} | {'规则':^{merged_max_rule_len}} | {score_header:^6} | {'样本数':^6} | {'类型':^4} | {'合并数':^6} |"
+            merged_separator = "|" + "-" * 6 + "|" + "-" * (merged_max_condition_len + 2) + "|" + "-" * (merged_max_rule_len + 2) + "|" + "-" * 8 + "|" + "-" * 8 + "|" + "-" * 6 + "|" + "-" * 8 + "|"
             
             print(merged_separator)
             print(merged_header)
             print(merged_separator)
             
-            # 按R²重新排序合并后的规则
-            merged_sorted = sorted(merged_rules, key=lambda x: x['cv_r2_score'], reverse=True)
+            # 按评分重新排序合并后的规则
+            merged_sorted = sorted(merged_rules, key=lambda x: x['score'], reverse=True)
             
             for i, rule in enumerate(merged_sorted, 1):
                 condition = rule['condition']
@@ -644,9 +1060,10 @@ class OptimalConditionalRuleDiscoverer:
                 if len(rule_str) > merged_max_rule_len:
                     rule_str = rule_str[:merged_max_rule_len-3] + "..."
                 
+                rule_type_short = "分类" if rule.get('rule_type') == 'classification' else "回归"
                 merge_info = f"{rule.get('merged_from', 1)}" if 'merged_from' in rule else "1"
                 
-                row = f"| {i:^4} | {condition:<{merged_max_condition_len}} | {rule_str:<{merged_max_rule_len}} | {rule['cv_r2_score']:^5.3f} | {rule['sample_count']:^6} | {merge_info:^6} |"
+                row = f"| {i:^4} | {condition:<{merged_max_condition_len}} | {rule_str:<{merged_max_rule_len}} | {rule['score']:^6.3f} | {rule['sample_count']:^6} | {rule_type_short:^4} | {merge_info:^6} |"
                 print(row)
             
             print(merged_separator)
@@ -654,7 +1071,7 @@ class OptimalConditionalRuleDiscoverer:
             # 合并后统计
             print(f"\n📊 合并后规则统计:")
             print(f"   • 合并后规则数: {len(merged_rules)} (减少了 {len(sorted_rules) - len(merged_rules)} 条)")
-            print(f"   • 平均R²分数: {np.mean([r['cv_r2_score'] for r in merged_rules]):.3f}")
+            print(f"   • 平均评分: {np.mean([r['score'] for r in merged_rules]):.3f}")
             print(f"   • 覆盖样本总数: {sum(r['sample_count'] for r in merged_rules)}")
             
             # 突出显示简化效果

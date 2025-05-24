@@ -5,10 +5,10 @@
 
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from discover_conditional_rules_optimal import OptimalConditionalRuleDiscoverer
-from rule_predictor_simple import SimpleRulePredictor, create_simple_predictor_from_discoverer
+from core.discover_conditional_rules_optimal import OptimalConditionalRuleDiscoverer
+from core.rule_predictor_simple import SimpleRulePredictor, create_simple_predictor_from_discoverer
 
 def simple_demo():
     print("🔮 === 简化版智能预测演示 (SimpleRulePredictor) === 🔮")

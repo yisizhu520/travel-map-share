@@ -1,0 +1,29 @@
+[
+  {
+    "condition": "x ∈ {x1}",
+    "rule": "result = a",
+    "score": 1.0,
+    "sample_count": 243,
+    "rule_type": "classification",
+    "target_value": "a",
+    "mapping_type": "simple_categorical"
+  },
+  {
+    "condition": "x ∈ {x2}",
+    "rule": "result = b",
+    "score": 1.0,
+    "sample_count": 243,
+    "rule_type": "classification",
+    "target_value": "b",
+    "mapping_type": "simple_categorical"
+  },
+  {
+    "condition": "x ∈ {x3}",
+    "rule": "result = c",
+    "score": 1.0,
+    "sample_count": 243,
+    "rule_type": "classification",
+    "target_value": "c",
+    "mapping_type": "simple_categorical"
+  }
+]

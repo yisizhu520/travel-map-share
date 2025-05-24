@@ -1,0 +1,17 @@
+[
+  {
+    "condition": "x ∈ {x1}",
+    "polynomial": "a",
+    "description": "当x=x1时，result等于a列的值"
+  },
+  {
+    "condition": "x ∈ {x2}",
+    "polynomial": "b",
+    "description": "当x=x2时，result等于b列的值"
+  },
+  {
+    "condition": "x ∈ {x3}",
+    "polynomial": "c",
+    "description": "当x=x3时，result等于c列的值"
+  }
+]
